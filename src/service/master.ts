@@ -1,4 +1,4 @@
-import cluster, { Worker } from 'cluster'
+import cluster, { ClusterSettings, Worker } from 'cluster'
 import { constants } from 'os'
 
 import { INSPECT_DEBUGGER_PORT, LINKED, UP_SIGNAL } from '../constants'
@@ -75,6 +75,24 @@ const handleSignal = (timeout: number): NodeJS.SignalsListener => (signal) => {
   }, waitTimeToForceKill)
 }
 
+const transformArgSingle = (args: string[], name: string, func: (value: string) => any) => {
+  const argPrefix = `--${name}=`
+  return args.map(arg => {
+    if (!arg.startsWith(argPrefix)) {
+      return arg
+    }
+    const value = arg.slice(argPrefix.length)
+    return `${argPrefix}${func(value)}`
+  })
+}
+
+const transformArg = (args: string[], name: string, func: (value: string) => any) => {
+  const alternate = name.includes('-') ? name.replace(/-/g, '_') : name.replace(/_/g, '-')
+  args = transformArgSingle(args, name, func)
+  args = transformArgSingle(args, alternate, func)
+  return args
+}
+
 export const startMaster = (service: ServiceJSON) => {
   const { workers: numWorkers, timeout = GRACEFULLY_SHUTDOWN_TIMEOUT_S } = service
 
@@ -82,10 +100,14 @@ export const startMaster = (service: ServiceJSON) => {
     process.env.DETERMINISTIC_VARY = 'true'
   }
 
-  // Setup dubugger
-  if (LINKED) {
-    cluster.setupMaster({ inspectPort: INSPECT_DEBUGGER_PORT })
+  const settings: ClusterSettings = {
+    execArgv: transformArg(process.execArgv, 'max-old-space-size', size => Math.round(parseInt(size, 10)/numWorkers)),
   }
+  if (LINKED) {
+    // Setup debugger
+    settings.inspectPort = INSPECT_DEBUGGER_PORT
+  }
+  cluster.setupMaster(settings)
 
   const shutdownTimeout = Math.max(GRACEFULLY_SHUTDOWN_TIMEOUT_S, timeout)
 
